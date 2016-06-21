@@ -29,7 +29,9 @@ module CheckGluster
       'bitrot' => ['Bitrot Daemon', 'Scrubber Daemon'],
       'heal' => ['Self-heal Daemon'],
       'nfs' => ['NFS Server']
-    }
+    },
+    # Parameters to re-run failed command
+    :rerun => { :times => 10, :delay => 0.5 }
   }.freeze
 
   # Parse command line options
@@ -196,14 +198,27 @@ module CheckGluster
       bricks
     end
 
+    # rubocop:disable Metrics/CyclomaticComplexity
     def volume_bitrot_scrub_status(volume)
-      info = gluster("volume bitrot #{volume} scrub status", false).split("\n")
+      info = []
+      i = 0
+      # Try to run bitrot scrub status not more than 10 times
+      while info.empty?
+        i += 1
+        begin
+          info = gluster("volume bitrot #{volume} scrub status", false).split("\n")
+        rescue ArgumentError => ex
+          raise ex if ex.message != 'invalid byte sequence in UTF-8' || i > PARAMS[:rerun][:times]
+          sleep PARAMS[:rerun][:delay]
+        end
+      end
       status = parse_bitrot_status(info)
       raise 'BitRot is not enabled' unless status['state']
       status['nodes'].each do |node, _v|
         raise "BitRot error on #{node}" unless status['nodes'][node]['errors'] == 0
       end
     end
+    # rubocop:enable Metrics/CyclomaticComplexity
 
     def parse_bitrot_status(info)
       info.map! { |s| s.gsub(/localhost/, Socket.gethostname) }
