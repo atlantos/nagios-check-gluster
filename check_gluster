@@ -31,16 +31,23 @@ module CheckGluster
       'nfs' => ['NFS Server']
     },
     # Parameters to re-run failed command
-    :rerun => { :times => 10, :delay => 0.5 }
+    :rerun => { :times => 10, :delay => 0.5 },
+    # persistent state file
+    :state_file => '/var/run/check_gluster_state.yaml',
+    :state_ttl => 1200
   }.freeze
 
   # Parse command line options
   class OptionsParser
-    @checks = PARAMS[:check_running_daemons].keys
-    private_class_method :new
-    attr_reader :checks
+    attr_reader :checks, :state_file, :state_ttl
 
-    def self.parse
+    def initialize
+      @checks = PARAMS[:check_running_daemons].keys
+      @state_file = PARAMS[:state_file]
+      @state_ttl = PARAMS[:state_ttl]
+    end
+
+    def parse!
       option_parser = OptionParser.new
 
       option_parser.on(
@@ -53,6 +60,24 @@ module CheckGluster
           raise OptionParser::InvalidOption, check.to_s unless @checks.include? check
         end
         @checks = list
+      end
+
+      option_parser.on(
+        '-s',
+        '--state-file /path/to/file',
+        String,
+        'State storage file. Default is ' + @state_file
+      ) do |x|
+        @state_file = x.to_s
+      end
+
+      option_parser.on(
+        '-t',
+        '--ttl seconds',
+        Integer,
+        'State storage TTL. Default is ' + @state_ttl.to_s
+      ) do |x|
+        @state_ttl = x.to_i
       end
 
       begin
@@ -75,9 +100,16 @@ module CheckGluster
       require 'crack'
       $VERBOSE = true
       require 'socket'
+      require 'yaml'
     rescue Exception => ex
       puts ex.message
       exit(NagiosStatus::CRITICAL)
+    end
+
+    def initialize(*var)
+      var = var.shift
+      @state_file = var.nil? && var[:state_file].nil? ? PARAMS[:state_file] : var[:state_file]
+      @state_ttl  = var.nil? && var[:state_ttl].nil?  ? PARAMS[:state_ttl] : var[:state_ttl]
     end
 
     def check_glusterd
@@ -172,19 +204,34 @@ module CheckGluster
 
     def volume_heal_info(volume)
       info = gluster("volume heal #{volume} info", false).split("\n")
-      parse_heal(info).each do |brick, data|
-        raise "Brick #{brick} is disconnected" unless data['status']
-        raise "Brick #{brick} is split-brained" unless data['entries'] == 0
+      info = parse_heal(info)
+      if @state_ttl > 0
+        info = merge_heal(load_state(@state_file), info)
+        store_state(@state_file, info)
       end
+      split_entries = []
+      time = Time.now.to_i
+      info.each do |brick, data|
+        raise "Brick #{brick} is disconnected" unless data['status']
+        data['content'].each do |line, saved_time|
+          if @state_ttl == 0
+            split_entries.push(brick + line)
+          elsif time - saved_time >= @state_ttl
+            split_entries.push(brick + line + '=' + (time - saved_time).to_s + 's')
+          end
+        end
+      end
+      raise 'Files are split-brained : ' + split_entries.join(' ') unless split_entries.empty?
     end
 
     def parse_heal(info)
       bricks = {}
       brick = ''
+      time = Time.now.to_i
       info.each do |line|
         if line =~ /^Brick /
           brick = line.gsub(/^Brick /, '')
-          bricks[brick] = { 'data' => [] }
+          bricks[brick] = { 'content' => {} }
         elsif line =~ /^Status: Connected/
           bricks[brick]['status'] = true
         elsif line =~ /^Status.*/
@@ -192,10 +239,39 @@ module CheckGluster
         elsif line =~ /^Number of entries: /
           bricks[brick]['entries'] = line.gsub(/^Number of entries: /, '').to_i
         else
-          bricks[brick]['data'].push(line)
+          line.gsub!(/\s+$/, '')
+          bricks[brick]['content'][line] = time if line != ''
         end
       end
       bricks
+    end
+
+    def merge_heal(old, new)
+      old.each do |brick, data|
+        data['content'].each do |line, time|
+          new[brick]['content'][line] = time if new.key?(brick) && new[brick]['content'].key?(line)
+        end
+      end
+      new
+    end
+
+    def store_state(file, data)
+      file = File.open(file, File::WRONLY | File::CREAT | File::TRUNC, 0644)
+      file.flock(File::LOCK_EX)
+      file.write(data.to_yaml)
+      file.close
+    end
+
+    def load_state(file)
+      file = File.open(file, File::RDONLY)
+      file.flock(File::LOCK_EX)
+      data = file.read
+      file.close
+      begin
+        YAML.load(data)
+      rescue Psych::SyntaxError
+        {}
+      end
     end
 
     # rubocop:disable Metrics/CyclomaticComplexity
@@ -244,15 +320,18 @@ module CheckGluster
 
     private :get_services_from_checks, :gluster, :any_to_array
     private :check_running, :parse_heal, :parse_bitrot_status
+    private :merge_heal, :store_state, :load_state
   end
 end
 
 begin
   # Parse parameters
-  checks = CheckGluster::OptionsParser.parse
+  option_parser = CheckGluster::OptionsParser.new
+  option_parser.parse!
+  checks = option_parser.checks
 
   # Run gluster checks
-  gluster_check = CheckGluster::Check.new
+  gluster_check = CheckGluster::Check.new(:state_file => option_parser.state_file, :state_ttl => option_parser.state_ttl)
   gluster_check.check_glusterd
   gluster_check.peer_status
   gluster_check.pool_list
