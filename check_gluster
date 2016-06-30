@@ -256,22 +256,25 @@ module CheckGluster
     end
 
     def store_state(file, data)
-      file = File.open(file, File::WRONLY | File::CREAT | File::TRUNC, 0644)
-      file.flock(File::LOCK_EX)
-      file.write(data.to_yaml)
-      file.close
+      fh = File.open(file, File::WRONLY | File::CREAT | File::TRUNC, 0644)
+      fh.flock(File::LOCK_EX)
+      fh.write(data.to_yaml)
+      fh.close
     end
 
     def load_state(file)
-      file = File.open(file, File::RDONLY)
-      file.flock(File::LOCK_EX)
-      data = file.read
-      file.close
+      return {} unless File.exist?(file)
+      fh = File.open(file, File::RDONLY)
+      fh.flock(File::LOCK_EX)
+      data = fh.read
+      fh.close
       begin
-        YAML.load(data)
-      rescue Psych::SyntaxError
-        {}
+        data = YAML.load(data)
+        raise LoadError if data.class.to_s != 'Hash'
+      rescue Psych::SyntaxError, LoadError
+        raise 'file ' + file.to_s + ' has incorrect format'
       end
+      data
     end
 
     # rubocop:disable Metrics/CyclomaticComplexity
