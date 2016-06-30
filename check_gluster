@@ -256,7 +256,7 @@ module CheckGluster
     end
 
     def store_state(file, data)
-      fh = File.open(file, File::WRONLY | File::CREAT | File::TRUNC, 0644)
+      fh = File.open(file, File::WRONLY | File::CREAT | File::TRUNC, 0600)
       fh.flock(File::LOCK_EX)
       fh.write(data.to_yaml)
       fh.close
