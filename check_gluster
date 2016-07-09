@@ -181,14 +181,10 @@ module CheckGluster
       nodes = gluster("volume status #{volume}")['volStatus']['volumes']['volume']['node']
       nodes = any_to_array(nodes)
       nodes.each { |node| node['path'] = Socket.gethostname if node['path'] == 'localhost' }
-      # Checking that all processes are running
-      nodes.each do |node|
-        raise "process #{node['hostname']}:#{node['path']} is not online" if node['status'].to_i != 1
-      end
       # Check that all bricks are running
       bricks.each do |brick|
         raise "volume #{brick[0]}:#{brick[1]} is not running" unless check_running(nodes, brick[0], brick[1])
-        # Check that is running
+        # Check that processes are running
         get_services_from_checks(checks).each do |daemon|
           raise "Daemon #{brick[0]}:\"#{daemon}\" is not started" unless check_running(nodes, daemon, brick[0])
         end
@@ -197,7 +193,7 @@ module CheckGluster
 
     def check_running(nodes, hostname, path)
       nodes.each do |node|
-        return true if node['hostname'] == hostname && node['path'] == path
+        return true if node['hostname'] == hostname && node['path'] == path && node['status'].to_i == 1
       end
       false
     end
