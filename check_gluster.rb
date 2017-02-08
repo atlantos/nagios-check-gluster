@@ -1,10 +1,13 @@
 #!/usr/bin/env ruby
 
-
+# We use old ruby 1.8.7
 # rubocop:disable Style/HashSyntax
 
 # We match all exceptions except SystemExit to redefine exit status for nagios
 # rubocop:disable Lint/RescueException
+
+# Other disables
+# rubocop:disable Metrics/AbcSize, Metrics/LineLength, Metrics/MethodLength, Metrics/ClassLength
 
 # Nagios exit codes
 module NagiosStatus
