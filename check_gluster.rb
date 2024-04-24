@@ -180,7 +180,7 @@ module CheckGluster
     def volume_status(volume, bricks, checks)
       nodes = gluster("volume status #{volume}")['volStatus']['volumes']['volume']['node']
       nodes = any_to_array(nodes)
-      nodes.each { |node| node['path'] = Socket.gethostbyname(Socket.gethostname).first if node['path'] == 'localhost' }
+      nodes.each { |node| node['path'] = Addrinfo.getaddrinfo(Socket.gethostname, 80).first if node['path'] == 'localhost' }
       # Check that all bricks are running
       bricks.each do |brick|
         raise "volume #{brick[0]}:#{brick[1]} is not running" unless check_running(nodes, brick[0], brick[1])
